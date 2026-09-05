@@ -1,23 +1,46 @@
 package com.genymobile.scrcpy.wrappers;
 
-import com.genymobile.scrcpy.Ln;
+import com.genymobile.scrcpy.AndroidVersions;
+import com.genymobile.scrcpy.FakeContext;
+import com.genymobile.scrcpy.util.Ln;
 
+import android.annotation.SuppressLint;
+import android.annotation.TargetApi;
+import android.content.IContentProvider;
+import android.content.Intent;
 import android.os.Binder;
+import android.os.Bundle;
 import android.os.IBinder;
 import android.os.IInterface;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 
-public class ActivityManager {
+@SuppressLint("PrivateApi,DiscouragedPrivateApi")
+public final class ActivityManager {
 
     private final IInterface manager;
     private Method getContentProviderExternalMethod;
     private boolean getContentProviderExternalMethodNewVersion = true;
     private Method removeContentProviderExternalMethod;
+    private Method startActivityAsUserMethod;
+    private Method forceStopPackageMethod;
+    private Method broadcastIntentMethod;
 
-    public ActivityManager(IInterface manager) {
+    static ActivityManager create() {
+        try {
+            // On old Android versions, the ActivityManager is not exposed via AIDL,
+            // so use ActivityManagerNative.getDefault()
+            Class<?> cls = Class.forName("android.app.ActivityManagerNative");
+            Method getDefaultMethod = cls.getDeclaredMethod("getDefault");
+            IInterface am = (IInterface) getDefaultMethod.invoke(null);
+            return new ActivityManager(am);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private ActivityManager(IInterface manager) {
         this.manager = manager;
     }
 
@@ -42,16 +65,17 @@ public class ActivityManager {
         return removeContentProviderExternalMethod;
     }
 
-    private ContentProvider getContentProviderExternal(String name, IBinder token) {
+    @TargetApi(AndroidVersions.API_29_ANDROID_10)
+    public IContentProvider getContentProviderExternal(String name, IBinder token) {
         try {
             Method method = getGetContentProviderExternalMethod();
             Object[] args;
             if (getContentProviderExternalMethodNewVersion) {
                 // new version
-                args = new Object[]{name, ServiceManager.USER_ID, token, null};
+                args = new Object[]{name, FakeContext.ROOT_UID, token, null};
             } else {
                 // old version
-                args = new Object[]{name, ServiceManager.USER_ID, token};
+                args = new Object[]{name, FakeContext.ROOT_UID, token};
             }
             // ContentProviderHolder providerHolder = getContentProviderExternal(...);
             Object providerHolder = method.invoke(manager, args);
@@ -61,12 +85,8 @@ public class ActivityManager {
             // IContentProvider provider = providerHolder.provider;
             Field providerField = providerHolder.getClass().getDeclaredField("provider");
             providerField.setAccessible(true);
-            Object provider = providerField.get(providerHolder);
-            if (provider == null) {
-                return null;
-            }
-            return new ContentProvider(this, provider, name, token);
-        } catch (InvocationTargetException | IllegalAccessException | NoSuchMethodException | NoSuchFieldException e) {
+            return (IContentProvider) providerField.get(providerHolder);
+        } catch (ReflectiveOperationException e) {
             Ln.e("Could not invoke method", e);
             return null;
         }
@@ -76,12 +96,97 @@ public class ActivityManager {
         try {
             Method method = getRemoveContentProviderExternalMethod();
             method.invoke(manager, name, token);
-        } catch (InvocationTargetException | IllegalAccessException | NoSuchMethodException e) {
+        } catch (ReflectiveOperationException e) {
             Ln.e("Could not invoke method", e);
         }
     }
 
     public ContentProvider createSettingsProvider() {
-        return getContentProviderExternal("settings", new Binder());
+        IBinder token = new Binder();
+        IContentProvider provider = getContentProviderExternal("settings", token);
+        if (provider == null) {
+            return null;
+        }
+        return new ContentProvider(this, provider, "settings", token);
+    }
+
+    private Method getStartActivityAsUserMethod() throws NoSuchMethodException, ClassNotFoundException {
+        if (startActivityAsUserMethod == null) {
+            Class<?> iApplicationThreadClass = Class.forName("android.app.IApplicationThread");
+            Class<?> profilerInfo = Class.forName("android.app.ProfilerInfo");
+            startActivityAsUserMethod = manager.getClass()
+                    .getMethod("startActivityAsUser", iApplicationThreadClass, String.class, Intent.class, String.class, IBinder.class, String.class,
+                            int.class, int.class, profilerInfo, Bundle.class, int.class);
+        }
+        return startActivityAsUserMethod;
+    }
+
+    public int startActivity(Intent intent) {
+        return startActivity(intent, null);
+    }
+
+    @SuppressWarnings("ConstantConditions")
+    public int startActivity(Intent intent, Bundle options) {
+        try {
+            Method method = getStartActivityAsUserMethod();
+            return (int) method.invoke(
+                    /* this */ manager,
+                    /* caller */ null,
+                    /* callingPackage */ FakeContext.PACKAGE_NAME,
+                    /* intent */ intent,
+                    /* resolvedType */ null,
+                    /* resultTo */ null,
+                    /* resultWho */ null,
+                    /* requestCode */ 0,
+                    /* startFlags */ 0,
+                    /* profilerInfo */ null,
+                    /* bOptions */ options,
+                    /* userId */ /* UserHandle.USER_CURRENT */ -2);
+        } catch (Throwable e) {
+            Ln.e("Could not invoke method", e);
+            return 0;
+        }
+    }
+
+    private Method getForceStopPackageMethod() throws NoSuchMethodException {
+        if (forceStopPackageMethod == null) {
+            forceStopPackageMethod = manager.getClass().getMethod("forceStopPackage", String.class, int.class);
+        }
+        return forceStopPackageMethod;
+    }
+
+    public void forceStopPackage(String packageName) {
+        try {
+            Method method = getForceStopPackageMethod();
+            method.invoke(manager, packageName, /* userId */ /* UserHandle.USER_CURRENT */ -2);
+        } catch (Throwable e) {
+            Ln.e("Could not invoke method", e);
+        }
+    }
+
+    private Method getBroadcastIntentMethod() throws NoSuchMethodException {
+        if (broadcastIntentMethod == null) {
+            try {
+                Class<?> iApplicationThreadClass = Class.forName("android.app.IApplicationThread");
+                Class<?> iIntentReceiverClass = Class.forName("android.content.IIntentReceiver");
+                broadcastIntentMethod = manager.getClass()
+                        .getMethod("broadcastIntent", iApplicationThreadClass, Intent.class, String.class, iIntentReceiverClass, int.class,
+                                String.class, Bundle.class, String[].class, int.class, Bundle.class, boolean.class, boolean.class, int.class);
+            } catch (ClassNotFoundException e) {
+                throw new AssertionError(e);
+            }
+        }
+        return broadcastIntentMethod;
+    }
+
+    public void sendBroadcast(Intent intent) {
+        try {
+            // Equivalent to:
+            //     adb shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://<path>
+            Method method = getBroadcastIntentMethod();
+            method.invoke(manager, null, intent, null, null, 0, null, null, null, -1, null, true, false, /* userId */ -2);
+        } catch (Throwable e) {
+            Ln.e("Could not invoke method", e);
+        }
     }
 }

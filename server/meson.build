@@ -13,8 +13,8 @@ if prebuilt_server == ''
                   install_dir: 'share/scrcpy')
 else
     if not prebuilt_server.startswith('/')
-        # relative path needs some trick
-        prebuilt_server = meson.source_root() + '/' + prebuilt_server
+        # prebuilt server path is relative to the root scrcpy directory
+        prebuilt_server = '../' + prebuilt_server
     endif
     custom_target('scrcpy-server-prebuilt',
                   input: prebuilt_server,
@@ -22,4 +22,10 @@ else
                   command: ['cp', '@INPUT@', '@OUTPUT@'],
                   install: true,
                   install_dir: 'share/scrcpy')
+endif
+
+if meson.version().version_compare('>= 0.58.0')
+       devenv = environment()
+       devenv.set('SCRCPY_SERVER_PATH', meson.current_build_dir() / 'scrcpy-server')
+       meson.add_devenv(devenv)
 endif

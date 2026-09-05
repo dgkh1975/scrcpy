@@ -1,37 +1,42 @@
-#ifndef INPUTMANAGER_H
-#define INPUTMANAGER_H
+#ifndef SC_INPUTMANAGER_H
+#define SC_INPUTMANAGER_H
 
 #include "common.h"
 
 #include <stdbool.h>
-
-#include <SDL2/SDL.h>
+#include <stdint.h>
+#include <SDL3/SDL_events.h>
+#include <SDL3/SDL_keycode.h>
 
 #include "controller.h"
-#include "fps_counter.h"
-#include "scrcpy.h"
-#include "screen.h"
+#include "file_pusher.h"
+#include "options.h"
+#include "trait/gamepad_processor.h"
+#include "trait/key_processor.h"
+#include "trait/mouse_processor.h"
 
-struct input_manager {
-    struct controller *controller;
-    struct screen *screen;
+struct sc_input_manager {
+    struct sc_controller *controller;
+    struct sc_file_pusher *fp;
+    struct sc_screen *screen;
 
-    // SDL reports repeated events as a boolean, but Android expects the actual
-    // number of repetitions. This variable keeps track of the count.
-    unsigned repeat;
+    struct sc_key_processor *kp;
+    struct sc_mouse_processor *mp;
+    struct sc_gamepad_processor *gp;
 
-    bool control;
-    bool forward_key_repeat;
-    bool prefer_text;
-    bool forward_all_clicks;
+    bool camera;
+
+    struct sc_mouse_bindings mouse_bindings;
     bool legacy_paste;
+    bool clipboard_autosync;
 
-    struct {
-        unsigned data[SC_MAX_SHORTCUT_MODS];
-        unsigned count;
-    } sdl_shortcut_mods;
+    uint16_t sdl_shortcut_mods;
 
     bool vfinger_down;
+    bool vfinger_invert_x;
+    bool vfinger_invert_y;
+
+    uint8_t mouse_buttons_state; // OR of enum sc_mouse_button values
 
     // Tracks the number of identical consecutive shortcut key down events.
     // Not to be confused with event->repeat, which counts the number of
@@ -39,13 +44,33 @@ struct input_manager {
     unsigned key_repeat;
     SDL_Keycode last_keycode;
     uint16_t last_mod;
+
+    uint64_t next_sequence; // used for request acknowledgements
+
+    bool disconnected;
+};
+
+struct sc_input_manager_params {
+    struct sc_controller *controller;
+    struct sc_file_pusher *fp;
+    struct sc_screen *screen;
+    struct sc_key_processor *kp;
+    struct sc_mouse_processor *mp;
+    struct sc_gamepad_processor *gp;
+    bool camera;
+
+    struct sc_mouse_bindings mouse_bindings;
+    bool legacy_paste;
+    bool clipboard_autosync;
+    uint8_t shortcut_mods; // OR of enum sc_shortcut_mod values
 };
 
 void
-input_manager_init(struct input_manager *im, struct controller *controller,
-                   struct screen *screen, const struct scrcpy_options *options);
+sc_input_manager_init(struct sc_input_manager *im,
+                      const struct sc_input_manager_params *params);
 
-bool
-input_manager_handle_event(struct input_manager *im, SDL_Event *event);
+void
+sc_input_manager_handle_event(struct sc_input_manager *im,
+                              const SDL_Event *event);
 
 #endif
